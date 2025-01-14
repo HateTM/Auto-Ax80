@@ -46,7 +46,7 @@ jobs:
         cd openwrt
         git remote add custom ../$CUSTOM_REPO_DIR
         git fetch custom
-        git rebase custom/main --allow-unrelated-histories -m "Merge custom OpenWrt build."
+        git rebase custom/main -m "Merge custom OpenWrt build."
         # Если используется другая ветка, замените `custom/main` на нужную, например `custom/develop`
 
     - name: Update and Install Feeds
