@@ -15,7 +15,7 @@ jobs:
     env:
       OPENWRT_VERSION: "v23.05.5"  # Тег релиза OpenWrt
       OPENWRT_REPO: "https://git.openwrt.org/openwrt/openwrt.git"
-      CUSTOM_REPO_URL: "https://github.com/HateTM/openwrt_tpl_ax80.git"  # Замените на URL вашей репозитории
+      CUSTOM_REPO_URL: "https://github.com/HateTM/Owrt.git"  # Замените на URL вашей репозитории
       CUSTOM_REPO_DIR: "Ax80GPT"
 
     steps:
@@ -50,7 +50,7 @@ jobs:
         cd openwrt
         git remote add custom ../$CUSTOM_REPO_DIR
         git fetch custom
-        git merge origin/Clean --allow-unrelated-histories -m "Merge custom OpenWrt build."
+        git merge custom/Clean --allow-unrelated-histories -m "Merge custom OpenWrt build."
         # Если используется другая ветка, замените `custom/main` на нужную, например `custom/develop`
 
     - name: Update and Install Feeds
