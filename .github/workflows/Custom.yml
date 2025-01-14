@@ -15,7 +15,7 @@ jobs:
     env:
       OPENWRT_VERSION: "v23.05.5"  # Тег релиза OpenWrt
       OPENWRT_REPO: "https://git.openwrt.org/openwrt/openwrt.git"
-      CUSTOM_REPO_URL: ”https://github.com/HateTM/openwrt_tpl_ax80.git"  # Замените на URL вашей репозитории
+      CUSTOM_REPO_URL: ”http://github.com/HateTM/openwrt_tpl_ax80.git"  # Замените на URL вашей репозитории
       CUSTOM_REPO_DIR: "Ax80GPT"
 
     steps:
