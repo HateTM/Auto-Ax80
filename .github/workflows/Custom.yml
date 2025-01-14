@@ -22,7 +22,7 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 3  # Для возможности работы с ветками и тегами
+        fetch-depth: 0  # Для возможности работы с ветками и тегами
 
     - name: Set up Git
       run: |
