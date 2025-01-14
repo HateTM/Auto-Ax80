@@ -1,12 +1,8 @@
 name: Build OpenWrt 23.05.5 Custom Firmware
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  repository_dispatch:
+  workflow_dispatch:
 
 jobs:
   build:
