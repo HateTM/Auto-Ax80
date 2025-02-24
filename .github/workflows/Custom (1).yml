@@ -46,7 +46,7 @@ jobs:
         cd openwrt
         git remote add custom ../$CUSTOM_REPO_DIR
         git fetch custom
-        git rebase custom/main 
+        git rebase custom/24.10-test
         # Если используется другая ветка, замените `custom/main` на нужную, например `custom/develop`
 
     - name: Update and Install Feeds
