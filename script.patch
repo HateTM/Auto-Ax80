@@ -670,7 +670,7 @@ index 668d9a8cb0..46c789fd3d 100644
  
 -DEVICE_VARS += NETGEAR_ENC_MODEL NETGEAR_ENC_REGION NETGEAR_ENC_HW_ID_LIST NETGEAR_ENC_MODEL_LIST
 +DEVICE_VARS += NETGEAR_ENC_MODEL NETGEAR_ENC_REGION NETGEAR_ENC_HW_ID_LIST NETGEAR_ENC_MODEL_LIST \
-+ OEM_DEVICE OEM_IDS OEM_HWER OEM_FWVER
++ OEM_DEVICE OEM_IDS OEM_HWVER OEM_FWVER
  
  loadaddr-$(CONFIG_TARGET_mediatek_mt7622) := 0x44000000
  loadaddr-$(CONFIG_TARGET_mediatek_mt7623) := 0x80008000
@@ -684,10 +684,10 @@ index 1dc5698034..1e8eee0721 100644
    IMAGE_SIZE := 51200k
 +  IMAGES += webui-factory.bin
 +  IMAGE/webui-factory.bin := uboot-kernel-bundle mt7986_tplink_archer-ax80 | pad-to 128k | header-ubi-factory
-+    TPLINK_DEVICE := Archer AX80
-+    TPLINK_IDS := 55530000,43410000,52550000
-+    TPLINK_VERSION := 1.0.0
-+    TPLINK_FWVER := 1.1.3
++    OEM_DEVICE := Archer AX80
++    OEM_IDS := 55530000,43410000,52550000
++    OEM_HWVER := 1.0.0
++    OEM_FWVER := 1.1.3
    IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
  endef
  TARGET_DEVICES += tplink_archer-ax80-v1
