@@ -6,14 +6,14 @@ index ac3f305362..fa84835f63 100644
  		$@
  endef
  
-+define Build/tplink-mkimage-ubi
-+	$(TOPDIR)/scripts/tplink-mkimage-ubi.py \
++define Build/header-ubi-factory
++	$(TOPDIR)/scripts/header-ubi-factory.py \
 +		--create \
-+		--device-name "$(TPLINK_DEVICE)" \
-+		--device-ver "$(TPLINK_VERSION)" \
-+		--special-ids "$(TPLINK_IDS)" \
-+		--version "$(TPLINK_FWVER)" \
-+		--rootfs "$@" \
++		--device-name "$(OEM_DEVICE)" \
++		--device-ver "$(OEM_HWVER)" \
++		--special-ids "$(OEM_IDS)" \
++		--version "$(OEM_FWVER)" \
++		--fwimage "$@" \
 +		"$(@).new"
 +	@mv "$(@).new" "$@"
 +endef
@@ -26,7 +26,7 @@ index ac3f305362..fa84835f63 100644
  		&& mv $@.new $@
  endef
 +
-+define Build/tpl-fake-image
++define Build/uboot-kernel-bundle
 +    $(STAGING_DIR_HOST)/bin/mkimage -A arm -T standalone \
 +	-C none -n "seconduboot" \
 +	-e 0x41e00000 \
@@ -76,9 +76,9 @@ index 7c6a19e5a7..c8b1c4697e 100644
  endef
  
 +define U-Boot/mt7986_tplink_archer-ax80
-+  NAME:=TP-LINK ARCHER AX80 (Second-Uboot)
++  NAME:=TP-LINK ARCHER AX80V1 (Stock)
 +  BUILD_SUBTARGET:=filogic
-+  UBOOT_CONFIG:=mt7986a_tplink_archer-ax80
++  UBOOT_CONFIG:=mt7986_tplink_archer-ax80
 +  BUILD_DEVICES:=tplink_archer-ax80-v1
 +  UBOOT_IMAGE:=u-boot.bin
 +  BL2_BOOTDEV:=spim-nand
@@ -105,7 +105,7 @@ index 0000000000..fb53b91a10
 +++ b/package/boot/uboot-mediatek/patches/461-add-tplink-archer-ax80-v1.patch
 @@ -0,0 +1,304 @@
 +--- /dev/null
-++++ b/configs/mt7986a_tplink_archer-ax80_defconfig
+++++ b/configs/mt7986_tplink_archer-ax80_defconfig
 +@@ -0,0 +1,115 @@
 ++CONFIG_ARM=y
 ++CONFIG_SYS_HAS_NONCACHED_MEMORY=y
@@ -154,7 +154,7 @@ index 0000000000..fb53b91a10
 ++CONFIG_CMD_PSTORE_MEM_ADDR=0x42ff0000
 ++CONFIG_CMD_SMC=y
 ++CONFIG_MTDIDS_DEFAULT="spi-nand0=spi-nand0"
-++CONFIG_MTDPARTS_DEFAULT="spi-nand0:2M(boot),1M(u-boot-env),50M(ubi0),50M(ubi1),8M(userconfig),8M(tp_data)"
+++CONFIG_MTDPARTS_DEFAULT="spi-nand0:2M(boot),1M(u-boot-env),50M(ubi0),50M(ubi1),8M(userconfig),4M(tp_data),8M(mali_data)"
 ++CONFIG_CMD_UBI=y
 ++CONFIG_CMD_UBI_RENAME=y
 ++CONFIG_OF_EMBED=y
@@ -398,27 +398,26 @@ index 0000000000..fb53b91a10
 ++};
 +--- /dev/null
 ++++ b/defenvs/tplink_archer_ax80_env
-+@@ -0,0 +1,9 @@
++@@ -0,0 +1,8 @@
 ++ipaddr=192.168.1.1
 ++serverip=192.168.1.254
 ++loadaddr=0x46000000
 ++autoboot=1
-++bootargs=ubi.mtd=ubi0 console=ttyS0,115200n1 loglevel=8 earlycon=uart8250,mmio32,0x11002000 init=/etc/preinit
+++bootcmd=ubi part ubi0; ubi read ${loadaddr} kernel; bootm ${loadaddr}
 ++mtdids=spi-nand0=spi-nand0
 ++mtdparts=spi-nand0:2M(boot),1M(u-boot-env),50M(ubi0),50M(ubi1),8M(userconfig),4M(tp_data),8M(mali_data)
 ++tp_boot_idx=0
-++bootcmd=ubi part ubi0; ubi read ${loadaddr} kernel; bootm ${loadaddr}
 diff --git a/scripts/tplink-mkimage-ubi.py b/scripts/tplink-mkimage-ubi.py
 new file mode 100755
 index 0000000000..bbeeecf1bb
 --- /dev/null
-+++ b/scripts/tplink-mkimage-ubi.py
++++ b/scripts/header-ubi-factory.py
 @@ -0,0 +1,246 @@
 +#!/usr/bin/env python3
 +#
 +# SPDX-License-Identifier: GPL-2.0-or-later
 +#
-+# tplink-mkimage-ubi.py: Creates TP-Link firmware image (Header+UBI)
++# header-ubi-factory.py: Creates TP-Link firmware image (Header+UBI)
 +# for TP-Link Archer AX80V1, but perhaps may work on other devices.
 +#
 +# Copyright © 2025 Sergey Shlukov <ichizakurain@gmail.com>
@@ -572,7 +571,7 @@ index 0000000000..bbeeecf1bb
 +def build_firmware_image(
 +    output_image: str,
 +    support: str,
-+    rootfs_path: Optional[str] = None,
++    fwimage_path: Optional[str] = None,
 +    version: Optional[str] = None,
 +    device_name: Optional[str] = None,
 +    device_ver: Optional[str] = None,
@@ -595,16 +594,16 @@ index 0000000000..bbeeecf1bb
 +    )
 +    modules_buffer = create_modules_buffer(module_files)
 +
-+    rootfs_data = b""
-+    if rootfs_path:
-+        with open(rootfs_path, "rb") as f:
-+            rootfs_data = f.read()
++    fwimage_data = b""
++    if fwimage_path:
++        with open(fwimage_path, "rb") as f:
++            fwimage_data = f.read()
 +
-+    total_size = HEADER_SIZE + len(modules_buffer) + len(rootfs_data)
++    total_size = HEADER_SIZE + len(modules_buffer) + len(fwimage_data)
 +    image = bytearray()
 +    image.extend(create_header(total_size, fw_id))
 +    image.extend(modules_buffer)
-+    image.extend(rootfs_data)
++    image.extend(fwimage_data)
 +
 +    image[4:20] = hashlib.md5(image[4:]).digest()
 +
@@ -624,12 +623,12 @@ index 0000000000..bbeeecf1bb
 +
 +def main() -> None:
 +    parser = argparse.ArgumentParser(
-+        description="TP-Link Ubi-Firmware Image Creation Tool"
++        description="Factory Ubi Header Creation Tool"
 +    )
 +    parser.add_argument("--create", action="store_true", help="Create image")
 +    parser.add_argument("image", type=str, help="Output image name")
-+    parser.add_argument("--support", type=str, default="", help="Support list string")
-+    parser.add_argument("--rootfs", type=str, help="Rootfs file")
++    parser.add_argument("--support", type=str, default="", help="Suppor-list string")
++    parser.add_argument("--fwimage", type=str, help="Fwimage file")
 +    parser.add_argument("--version", type=str, help="Firmware version")
 +    parser.add_argument("--device-name", type=str, help="Device name")
 +    parser.add_argument("--device-ver", type=str, help="Device version")
@@ -647,7 +646,7 @@ index 0000000000..bbeeecf1bb
 +        build_firmware_image(
 +            output_file,
 +            args.support,
-+            args.rootfs,
++            args.fwimage,
 +            args.version,
 +            args.device_name,
 +            args.device_ver,
@@ -671,7 +670,7 @@ index 668d9a8cb0..46c789fd3d 100644
  
 -DEVICE_VARS += NETGEAR_ENC_MODEL NETGEAR_ENC_REGION NETGEAR_ENC_HW_ID_LIST NETGEAR_ENC_MODEL_LIST
 +DEVICE_VARS += NETGEAR_ENC_MODEL NETGEAR_ENC_REGION NETGEAR_ENC_HW_ID_LIST NETGEAR_ENC_MODEL_LIST \
-+ TPLINK_DEVICE TPLINK_IDS TPLINK_VERSION TPLINK_FWVER
++ OEM_DEVICE OEM_IDS OEM_HWER OEM_FWVER
  
  loadaddr-$(CONFIG_TARGET_mediatek_mt7622) := 0x44000000
  loadaddr-$(CONFIG_TARGET_mediatek_mt7623) := 0x80008000
@@ -684,7 +683,7 @@ index 1dc5698034..1e8eee0721 100644
    PAGESIZE := 2048
    IMAGE_SIZE := 51200k
 +  IMAGES += webui-factory.bin
-+  IMAGE/webui-factory.bin := tpl-fake-image mt7986_tplink_archer-ax80 | pad-to 128k | tplink-mkimage-ubi
++  IMAGE/webui-factory.bin := uboot-kernel-bundle mt7986_tplink_archer-ax80 | pad-to 128k | header-ubi-factory
 +    TPLINK_DEVICE := Archer AX80
 +    TPLINK_IDS := 55530000,43410000,52550000
 +    TPLINK_VERSION := 1.0.0
