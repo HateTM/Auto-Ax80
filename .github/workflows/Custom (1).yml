@@ -1,9 +1,13 @@
-name: Build OpenWrt Snapshot Firmware
+name: Build OpenWrt Snapshot from PR
 
 
 on:
-  repository_dispatch:
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Номер PR из репозитория openwrt/openwrt (обязательно)'
+        required: true
+        type: string
 
 jobs:
   build:
@@ -17,6 +21,7 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
       with:
+        repository: openwrt/openwrt
         fetch-depth: 0
 
     - name: Set up Git
@@ -31,12 +36,14 @@ jobs:
         zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 ccache
 
 
-    - name: Clone OpenWrt Repository (Snapshot)
+    - name: Fetch and Checkout PR
       run: |
-        git clone $OPENWRT_REPO openwrt
+        # Переходим в клонированный репозиторий
         cd openwrt
-        git checkout master
-
+        # Получаем данные о PR
+        git fetch origin pull/${{ inputs.pr_number }}/head:pr-${{ inputs.pr_number }}
+        # Переключаемся на ветку PR
+        git checkout pr-${{ inputs.pr_number }}
 
     - name: Update and Install Feeds
       run: |
@@ -44,22 +51,20 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-
     - name: Setup Build Configuration
       run: |
         cd openwrt
         make defconfig
 
-    - name: Build OpenWrt (Snapshot)
+    - name: Build OpenWrt
       run: |
         cd openwrt
         make -j$(nproc) V=s
 
-
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: openwrt-snapshot-build-${{ github.run_id }}
+        name: openwrt-pr-${{ inputs.pr_number }}-build-${{ github.run_id }}
         path: openwrt/bin/targets/
 
     - name: Cache Ccache
