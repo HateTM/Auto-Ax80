@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'Номер PR из репозитория openwrt/openwrt (обязательно)'
+        description: '19440'
         required: true
         type: string
 
