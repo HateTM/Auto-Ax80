@@ -1,11 +1,10 @@
 name: Build OpenWrt Snapshot from PR
 
-
 on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: '19440'
+        description: 'Номер PR из репозитория openwrt/openwrt (обязательно)'
         required: true
         type: string
 
@@ -16,12 +15,12 @@ jobs:
     env:
       OPENWRT_REPO: "https://git.openwrt.org/openwrt/openwrt.git"
 
-
     steps:
-    - name: Checkout Repository
+    - name: Checkout OpenWrt Repository
       uses: actions/checkout@v4
       with:
         repository: openwrt/openwrt
+        path: openwrt
         fetch-depth: 0
 
     - name: Set up Git
@@ -35,14 +34,10 @@ jobs:
         sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev \
         zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 ccache
 
-
     - name: Fetch and Checkout PR
       run: |
-        # Переходим в клонированный репозиторий
         cd openwrt
-        # Получаем данные о PR
         git fetch origin pull/${{ inputs.pr_number }}/head:pr-${{ inputs.pr_number }}
-        # Переключаемся на ветку PR
         git checkout pr-${{ inputs.pr_number }}
 
     - name: Update and Install Feeds
