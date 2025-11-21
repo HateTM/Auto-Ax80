@@ -16,12 +16,10 @@ jobs:
       OPENWRT_REPO: "https://git.openwrt.org/openwrt/openwrt.git"
 
     steps:
-    - name: Checkout OpenWrt Repository
+    - name: Checkout Repository
       uses: actions/checkout@v4
       with:
-        repository: openwrt/openwrt
-        path: openwrt
-        fetch-depth: 0
+        fetch-depth: 0 
 
     - name: Set up Git
       run: |
