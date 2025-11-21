@@ -48,6 +48,7 @@ jobs:
 
     - name: Setup Build Configuration
       run: |
+        cp build.config openwrt/.config
         cd openwrt
         make defconfig
 
