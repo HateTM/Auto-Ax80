@@ -16,62 +16,81 @@ jobs:
       OPENWRT_REPO: https://github.com/openwrt/openwrt.git
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0 
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Set up Git
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "actions@github.com"
+      - name: Set up Git
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev \
-        zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 ccache
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev \
+          zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 ccache
 
-    - name: Fetch and Checkout PR
-      run: |
-        git clone $OPENWRT_REPO -b main openwrt
-        cd openwrt
-        git fetch origin pull/${{ inputs.pr_number }}/head:pr-${{ inputs.pr_number }}
-        git checkout pr-${{ inputs.pr_number }}
+      # === ВАЖНО: Восстановить кэш ДО сборки ===
+      - name: Restore Ccache
+        uses: actions/cache@v4
+        id: ccache-restore
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-v1  # Стабильный ключ!
+          restore-keys: |
+            ${{ runner.os }}-ccache-
 
-    - name: Update and Install Feeds
-      run: |
-        cd openwrt
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        
-    - name: Download build.config via API
-      run: |
+      - name: Configure Ccache
+        run: |
+          mkdir -p ~/.ccache
+          ccache -M 4G
+          ccache -o compression=true
+          echo "CCACHE_DIR=~/.ccache" >> $GITHUB_ENV
+          echo "CC=ccache gcc" >> $GITHUB_ENV
+          echo "CXX=ccache g++" >> $GITHUB_ENV
+
+      - name: Fetch and Checkout PR
+        run: |
+          git clone $OPENWRT_REPO -b main openwrt
+          cd openwrt
+          git fetch origin pull/${{ inputs.pr_number }}/head:pr-${{ inputs.pr_number }}
+          git checkout pr-${{ inputs.pr_number }}
+
+      - name: Update and Install Feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Download build.config via API
+        run: |
           curl -sL https://raw.githubusercontent.com/HateTM/Auto-Ax80/main/build.config -o openwrt/.config
 
-    - name: Setup Build Configuration
-      run: |
-        cd openwrt
-        make defconfig
-        make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+      - name: Setup Build Configuration
+        run: |
+          cd openwrt
+          make defconfig
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
 
-    - name: Build OpenWrt
-      run: |
-        cd openwrt
-        make -j$(nproc) V=s
+      - name: Build OpenWrt
+        run: |
+          cd openwrt
+          make -j$(nproc) V=s
 
-    - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: openwrt-pr-${{ inputs.pr_number }}-build-${{ github.run_id }}
-        path: openwrt/bin/targets/
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-pr-${{ inputs.pr_number }}-build-${{ github.run_id }}
+          path: openwrt/bin/targets/
 
-    - name: Cache Ccache
-      uses: actions/cache@v4
-      with:
-        path: ~/.ccache
-        key: ${{ runner.os }}-ccache-${{ github.sha }}
-        restore-keys: |
-          ${{ runner.os }}-ccache-
+      # Сохраняем кэш ПОСЛЕ сборки
+      - name: Save Ccache
+        uses: actions/cache@v4
+        if: steps.ccache-restore.outputs.cache-hit != 'true'  # Только если кэш не был восстановлен
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-v1  # Тот же стабильный ключ!
