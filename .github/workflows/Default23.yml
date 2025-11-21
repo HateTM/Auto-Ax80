@@ -357,6 +357,7 @@ jobs:
       # ===================================
       
       - name: Collect firmware artifacts
+        id: collect_artifacts
         run: |
           cd openwrt
           
@@ -365,61 +366,190 @@ jobs:
           # Определяем имя директории на основе PR
           if [ -n "${{ steps.upstream.outputs.pr_number }}" ]; then
             ART_DIR="artifacts/ax80-v1-pr-${{ steps.upstream.outputs.pr_number }}"
+            ARTIFACT_NAME="ax80-v1-pr-${{ steps.upstream.outputs.pr_number }}-firmware"
+            ARTIFACT_PATH="openwrt/artifacts/ax80-v1-pr-${{ steps.upstream.outputs.pr_number }}"
           else
             ART_DIR="artifacts/ax80-v1"
+            ARTIFACT_NAME="ax80-v1-firmware"
+            ARTIFACT_PATH="openwrt/artifacts/ax80-v1"
           fi
           
           mkdir -p "$ART_DIR"
           
-          # Ищем файлы прошивок
-          FIRMWARE_FILES=$(find bin/targets -type f \( -name '*-sysupgrade.bin' -o -name '*-factory.bin' \) 2>/dev/null || true)
+          echo "=== Поиск файлов прошивок ==="
           
-          if [ -z "$FIRMWARE_FILES" ]; then
-            echo "::warning::Файлы прошивок не найдены, ищем альтернативы..."
-            find bin/targets -type f -name '*.bin' || true
-            find bin -type f -name '*.bin' || true
-          else
-            echo "Найдены файлы прошивок:"
-            echo "$FIRMWARE_FILES"
-            echo "$FIRMWARE_FILES" | xargs -I {} cp {} "$ART_DIR/" 2>/dev/null || true
+          # Ищем файлы прошивок с разными расширениями
+          FIRMWARE_PATTERNS=(
+            "*-sysupgrade.bin"
+            "*-factory.bin" 
+            "*-initramfs-kernel.bin"
+            "*-squashfs-sysupgrade.bin"
+            "*-squashfs-factory.bin"
+            "*-combined-squashfs.img"
+            "*-rootfs-squashfs.img"
+            "*-kernel.bin"
+            "*.itb"           # FIT Images (Flattened Image Tree)
+            "*.img"           # Образы
+            "*.bin"           # Бинарные файлы
+            "*.trx"           # TRX форматы
+            "*.chk"           # CHK форматы
+            "*.ubi"           # UBI образы
+            "*.ubifs"         # UBIFS образы
+            "*.tar"           # Tar архивы
+            "*.gz"            # Сжатые файлы
+            "*.bz2"           # Сжатые файлы
+            "*.xz"            # Сжатые файлы
+          )
+          
+          FIRMWARE_COUNT=0
+          for pattern in "${FIRMWARE_PATTERNS[@]}"; do
+            echo "Поиск по шаблону: $pattern"
+            while IFS= read -r -d '' file; do
+              if [ -f "$file" ]; then
+                echo "Найдено: $file"
+                cp "$file" "$ART_DIR/"
+                FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
+              fi
+            done < <(find bin/targets -type f -name "$pattern" -print0 2>/dev/null || true)
+          done
+          
+          # Специальный поиск для FIT образов (часто имеют сложные имена)
+          echo "=== Специальный поиск FIT образов ==="
+          while IFS= read -r -d '' file; do
+            if [ -f "$file" ]; then
+              # Проверяем что это FIT образ
+              if file "$file" | grep -q -E "(Flattened Image Tree|FIT|Device Tree Blob)"; then
+                echo "Найден FIT образ: $file"
+                cp "$file" "$ART_DIR/"
+                FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
+              fi
+            fi
+          done < <(find bin/targets -type f -size +1M -print0 2>/dev/null || true)
+          
+          if [ $FIRMWARE_COUNT -eq 0 ]; then
+            echo "::warning::Файлы прошивок не найдены стандартными шаблонами"
+            echo "=== Расширенный поиск ==="
+            
+            # Ищем любые бинарные файлы в targets
+            echo "=== Поиск бинарных файлов ==="
+            find bin/targets -type f -size +1M -exec file {} \; | grep -E '(firmware|data|binary|FIT|Flattened Image Tree)' || true
+            
+            # Копируем все большие файлы из targets (кроме явно не прошивок)
+            echo "=== Копирование больших файлов ==="
+            while IFS= read -r -d '' file; do
+              if [ -f "$file" ]; then
+                # Исключаем некоторые типы файлов
+                if [[ "$file" != *".json" ]] && \
+                   [[ "$file" != *".txt" ]] && \
+                   [[ "$file" != *".log" ]] && \
+                   [[ "$file" != *".md" ]]; then
+                  echo "Копируем: $file"
+                  cp "$file" "$ART_DIR/"
+                  FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
+                fi
+              fi
+            done < <(find bin/targets -type f -size +1M -print0 2>/dev/null || true)
+            
+            # Пересчитываем
+            FIRMWARE_COUNT=$(find "$ART_DIR" -type f | wc -l)
           fi
+          
+          echo "Найдено файлов прошивок: $FIRMWARE_COUNT"
           
           # Копируем дополнительные файлы
-          cp .config "$ART_DIR/full.config" 2>/dev/null || true
-          find bin -name 'sha256sums' -exec cp {} "$ART_DIR/" \; 2>/dev/null || true
-          find bin -name '*.buildinfo' -exec cp {} "$ART_DIR/" \; 2>/dev/null || true
+          echo "=== Копирование дополнительных файлов ==="
+          cp .config "$ART_DIR/full.config" 2>/dev/null || echo "Конфиг не скопирован"
           
-          # Генерируем checksums если есть bin файлы
-          if ls "$ART_DIR"/*.bin >/dev/null 2>&1; then
-            (cd "$ART_DIR" && sha256sum *.bin > sha256sums.txt)
-            echo "✓ Checksums сгенерированы"
+          # Копируем информационные файлы
+          INFO_FILES=(
+            "sha256sums"
+            "*.buildinfo"
+            "*.manifest"
+            "version.buildinfo"
+            "profiles.json"
+            "config.seed"
+            "feeds.buildinfo"
+          )
+          
+          for pattern in "${INFO_FILES[@]}"; do
+            find bin -type f -name "$pattern" -exec cp {} "$ART_DIR/" \; 2>/dev/null || true
+          done
+          
+          # Генерируем checksums если есть файлы прошивок
+          if [ $FIRMWARE_COUNT -gt 0 ]; then
+            echo "=== Генерация checksums ==="
+            (cd "$ART_DIR" && sha256sum * > sha256sums.txt 2>/dev/null || true)
+            echo "✓ Checksums сгенерированы для $FIRMWARE_COUNT файлов"
+            
+            # Дополнительная информация о FIT образах
+            if find "$ART_DIR" -name "*.itb" | grep -q .; then
+              echo "=== Информация о FIT образах ==="
+              for itb_file in "$ART_DIR"/*.itb; do
+                if [ -f "$itb_file" ]; then
+                  echo "FIT образ: $(basename "$itb_file")"
+                  # Пытаемся получить информацию о FIT образе
+                  if command -v dumpimage >/dev/null 2>&1; then
+                    dumpimage -l "$itb_file" 2>/dev/null | head -10 || true
+                  fi
+                fi
+              done
+            fi
+          else
+            echo "::warning::Не найдено ни одного файла прошивки"
           fi
+          
+          # Создаем список файлов для отладки
+          echo "=== Содержимое bin директории ==="
+          find bin -type f -name '*' -exec ls -la {} \; 2>/dev/null | head -30 || true
           
           # Информация о сборке
           {
-            echo "Build: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            echo "Repo: ${{ github.repository }}"
+            echo "=== Build Information ==="
+            echo "Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "Repository: ${{ github.repository }}"
             echo "Commit: ${{ github.sha }}"
             echo "OpenWrt: ${{ steps.upstream.outputs.ref }}@${{ steps.upstream.outputs.short }}"
             if [ -n "${{ steps.upstream.outputs.pr_number }}" ]; then
               echo "PR: #${{ steps.upstream.outputs.pr_number }} - ${{ steps.upstream.outputs.pr_title }}"
               echo "PR Author: ${{ steps.upstream.outputs.pr_author }}"
             fi
-            echo "Files:"
-            ls -la "$ART_DIR/" 2>/dev/null || echo "No files found"
+            echo ""
+            echo "=== Firmware Files ($FIRMWARE_COUNT found) ==="
+            find "$ART_DIR" -type f -exec ls -la {} \; 2>/dev/null || echo "No files found"
+            echo ""
+            echo "=== File Types ==="
+            find "$ART_DIR" -type f -exec file {} \; 2>/dev/null || true
+            echo ""
+            echo "=== Directory Structure ==="
+            find bin/targets -type d 2>/dev/null | head -15 || true
           } > "$ART_DIR/build-info.txt"
           
-          echo "=== Результаты ==="
+          echo "=== Итоговые артефакты ==="
           ls -la "$ART_DIR/" 2>/dev/null || echo "Артефакты не созданы"
+          
+          # Сохраняем имена для следующего шага
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          echo "artifact_path=$ARTIFACT_PATH" >> "$GITHUB_OUTPUT"
+          echo "firmware_count=$FIRMWARE_COUNT" >> "$GITHUB_OUTPUT"
 
       - name: Upload firmware artifact
-        if: success()
+        if: steps.collect_artifacts.outputs.firmware_count != '0'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_PREFIX }}${{ steps.upstream.outputs.pr_number && format('-pr-{0}', steps.upstream.outputs.pr_number) || '' }}-firmware
-          path: openwrt/artifacts/ax80-v1${{ steps.upstream.outputs.pr_number && format('-pr-{0}', steps.upstream.outputs.pr_number) || '' }}
+          name: ${{ steps.collect_artifacts.outputs.artifact_name }}
+          path: ${{ steps.collect_artifacts.outputs.artifact_path }}
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
           compression-level: 9
+
+      - name: Warn if no firmware found
+        if: steps.collect_artifacts.outputs.firmware_count == '0'
+        run: |
+          echo "::warning::Не найдено ни одного файла прошивки!"
+          echo "Проверьте логи сборки и конфигурацию устройства."
+          echo "Содержимое bin директории:"
+          find openwrt/bin -type f -name '*' 2>/dev/null | head -30 || true
+          echo "Структура targets:"
+          find openwrt/bin/targets -type d 2>/dev/null || true
 
       # ===================================
       # 9. СОЗДАНИЕ РЕЛИЗА
