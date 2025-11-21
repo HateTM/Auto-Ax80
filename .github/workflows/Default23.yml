@@ -113,7 +113,8 @@ jobs:
           git clone --depth=1 --filter=blob:none --single-branch \
             --branch "$REF" \
             https://github.com/${{ env.REMOTE_REPOSITORY }}.git openwrt
-          
+          git fetch origin pull/19440/head:pr-19440
+          git checkout pr-19440
           cd openwrt
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
