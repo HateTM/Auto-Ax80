@@ -45,10 +45,13 @@ jobs:
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+        
+    - name: Download build.config via API
+      run: |
+          curl -sL https://raw.githubusercontent.com/HateTM/Auto-Ax80/main/build.config -o openwrt/.config
 
     - name: Setup Build Configuration
       run: |
-        cp build.config openwrt/.config
         cd openwrt
         make defconfig
 
