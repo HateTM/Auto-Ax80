@@ -28,7 +28,7 @@ concurrency:
 env:
   DL_CACHE_VERSION: v1
   ARTIFACT_RETENTION_DAYS: 7  # Уменьшаем retention
-  CONFIG_FILE: ax80-v1.config
+  CONFIG_FILE: build.config
   REMOTE_REPOSITORY: openwrt/openwrt
   REMOTE_REF: main
   RELEASE_PREFIX: ax80-v1
