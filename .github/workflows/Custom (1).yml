@@ -36,6 +36,7 @@ jobs:
 
     - name: Fetch and Checkout PR
       run: |
+        git clone $OPENWRT_REPO -b main openwrt
         cd openwrt
         git fetch origin pull/${{ inputs.pr_number }}/head:pr-${{ inputs.pr_number }}
         git checkout pr-${{ inputs.pr_number }}
