@@ -18,17 +18,21 @@ on:
         description: "Override upstream ref (optional)"
         required: false
         default: ""
+      test_pr:
+        description: "Test specific PR number (e.g., 19440)"
+        required: false
+        default: ""
   schedule:
-    - cron: "38 1 * * *"  # Ночное время (меньше нагрузка)
+    - cron: "38 1 * * *"
 
 concurrency:
-  group: openwrt-build-${{ github.ref }}
-  cancel-in-progress: true  # Отменяем предыдущие сборки
+  group: openwrt-build-${{ github.ref }}-${{ github.event.inputs.test_pr || 'main' }}
+  cancel-in-progress: true
 
 env:
   DL_CACHE_VERSION: v1
-  ARTIFACT_RETENTION_DAYS: 7  # Уменьшаем retention
-  CONFIG_FILE: build.config
+  ARTIFACT_RETENTION_DAYS: 7
+  CONFIG_FILE: ax80-v1.config
   REMOTE_REPOSITORY: openwrt/openwrt
   REMOTE_REF: main
   RELEASE_PREFIX: ax80-v1
@@ -37,8 +41,8 @@ env:
 jobs:
   build:
     name: Build TP-Link AX80 V1 Firmware
-    runs-on: ubuntu-22.04  # Используем конкретную версию
-    timeout-minutes: 360   # 6 часов максимум
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
 
     steps:
       # ===================================
@@ -50,7 +54,6 @@ jobs:
           echo "=== Освобождение дискового пространства ==="
           df -h
           
-          # Удаляем ненужные системные пакеты
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
           sudo rm -rf /usr/local/lib/android
@@ -64,7 +67,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: builder
-          
+
       - name: Install build dependencies
         run: |
           echo "=== Установка зависимостей ==="
@@ -113,18 +116,49 @@ jobs:
           git clone --depth=1 --filter=blob:none --single-branch \
             --branch "$REF" \
             https://github.com/${{ env.REMOTE_REPOSITORY }}.git openwrt
-          git fetch origin pull/19440/head:pr-19440
-          git checkout pr-19440
+          
           cd openwrt
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          
+          # Если указан PR для тестирования - мержим его
+          if [ -n "${{ github.event.inputs.test_pr }}" ]; then
+            PR_NUMBER="${{ github.event.inputs.test_pr }}"
+            echo "=== Тестируем PR #$PR_NUMBER ==="
+            
+            # Получаем и мержим PR
+            git fetch origin "pull/$PR_NUMBER/head:pr-$PR_NUMBER"
+            git checkout "pr-$PR_NUMBER"
+            
+            # Получаем информацию о PR
+            PR_INFO=$(curl -s "https://api.github.com/repos/${{ env.REMOTE_REPOSITORY }}/pulls/$PR_NUMBER")
+            PR_TITLE=$(echo "$PR_INFO" | grep '"title":' | head -1 | cut -d'"' -f4)
+            PR_AUTHOR=$(echo "$PR_INFO" | grep '"login":' | head -1 | cut -d'"' -f4)
+            
+            echo "PR Title: $PR_TITLE"
+            echo "PR Author: $PR_AUTHOR"
+            echo "PR Branch: pr-$PR_NUMBER"
+            
+            # Обновляем вывод с информацией о PR
+            echo "ref=$REF" >> "$GITHUB_OUTPUT"
+            echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_title=$PR_TITLE" >> "$GITHUB_OUTPUT"
+            echo "pr_author=$PR_AUTHOR" >> "$GITHUB_OUTPUT"
+          else
+            # Стандартная информация о коммите
+            echo "ref=$REF" >> "$GITHUB_OUTPUT"
+            echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+            echo "pr_number=" >> "$GITHUB_OUTPUT"
+            echo "pr_title=" >> "$GITHUB_OUTPUT"
+            echo "pr_author=" >> "$GITHUB_OUTPUT"
+          fi
           
           echo "✓ Исходный код получен: $(git rev-parse --short HEAD)"
           du -sh .
 
       # ===================================
-      # 3. КЭШИРОВАНИЕ (ОПТИМИЗИРОВАННОЕ)
+      # 3. КЭШИРОВАНИЕ (С УЧЕТОМ PR)
       # ===================================
       
       - name: Restore feeds cache
@@ -133,7 +167,7 @@ jobs:
           path: |
             openwrt/feeds
             openwrt/.feeds_updated
-          key: feeds-${{ runner.os }}-${{ hashFiles('openwrt/feeds.conf.default') }}-${{ github.sha }}
+          key: feeds-${{ runner.os }}-${{ hashFiles('openwrt/feeds.conf.default') }}-${{ github.sha }}-${{ steps.upstream.outputs.pr_number || 'main' }}
           restore-keys: |
             feeds-${{ runner.os }}-${{ hashFiles('openwrt/feeds.conf.default') }}-
             feeds-${{ runner.os }}-
@@ -142,7 +176,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: openwrt/dl
-          key: openwrt-dl-${{ runner.os }}-${{ env.DL_CACHE_VERSION }}-${{ hashFiles('builder/ax80-v1.config') }}
+          key: openwrt-dl-${{ runner.os }}-${{ env.DL_CACHE_VERSION }}-${{ hashFiles('builder/ax80-v1.config') }}-${{ steps.upstream.outputs.pr_number || 'main' }}
           restore-keys: |
             openwrt-dl-${{ runner.os }}-${{ env.DL_CACHE_VERSION }}-
             openwrt-dl-${{ runner.os }}-
@@ -151,12 +185,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ runner.os }}-ax80-v1-${{ github.sha }}
+          key: ccache-${{ runner.os }}-ax80-v1-${{ github.sha }}-${{ steps.upstream.outputs.pr_number || 'main' }}
           restore-keys: |
             ccache-${{ runner.os }}-ax80-v1-
 
       # ===================================
-      # 4. ОБНОВЛЕНИЕ FEEDS (ОПТИМИЗИРОВАННОЕ)
+      # 4. ОБНОВЛЕНИЕ FEEDS
       # ===================================
       
       - name: Update and install feeds
@@ -166,6 +200,12 @@ jobs:
           echo "=== Обновление feeds ==="
           echo "Диск перед обновлением:"
           df -h .
+          
+          # Проверяем, тестируем ли мы PR (может влиять на feeds)
+          if [ -n "${{ steps.upstream.outputs.pr_number }}" ]; then
+            echo "⚠️  Тестируем PR, принудительно обновляем feeds..."
+            rm -f .feeds_updated
+          fi
           
           # Быстрое обновление если есть кэш
           if [ -f .feeds_updated ]; then
@@ -202,14 +242,24 @@ jobs:
           
           echo "=== Подготовка конфигурации ==="
           
-          # Копируем файлы overlay
-          mkdir -p files
-          cp -a ../builder/files/. ./files/ 2>/dev/null || true
+          # Проверяем существование конфига
+          if [ ! -f "../builder/${{ env.CONFIG_FILE }}" ]; then
+            echo "::error::Конфигурационный файл ../builder/${{ env.CONFIG_FILE }} не найден"
+            ls -la ../builder/
+            exit 1
+          fi
+          
+          # Копируем файлы overlay если есть
+          if [ -d "../builder/files" ]; then
+            echo "Копируем файлы overlay..."
+            mkdir -p files
+            cp -a ../builder/files/. ./files/
+          fi
           
           # Копируем конфиг
-          cp ../builder/${{ env.CONFIG_FILE }} .config
+          cp "../builder/${{ env.CONFIG_FILE }}" .config
           
-          # Добавляем оптимизации для GitHub runners
+          # Добавляем оптимизации
           echo "CONFIG_CCACHE=y" >> .config
           echo "CONFIG_BUILD_LOG=y" >> .config
           
@@ -249,7 +299,7 @@ jobs:
           df -h .
 
       # ===================================
-      # 7. СБОРКА ПРОШИВКИ (ОПТИМИЗИРОВАННАЯ)
+      # 7. СБОРКА ПРОШИВКИ
       # ===================================
       
       - name: Build firmware
@@ -262,20 +312,20 @@ jobs:
           echo "=== Старт сборки ==="
           echo "Доступные ресурсы:"
           df -h .
-          nproc
+          echo "Ядер: $(nproc)"
           free -h
           
-          # Адаптивный параллелизм based on available resources
+          # Адаптивный параллелизм
           CORES=$(nproc)
           if [ $CORES -gt 4 ]; then
-            BUILD_JOBS=$((CORES - 2))  # Оставляем 2 ядра системе
+            BUILD_JOBS=$((CORES - 2))
           else
             BUILD_JOBS=$CORES
           fi
           
           echo "Используем $BUILD_JOBS параллельных задач"
           
-          # Мониторинг диска во время сборки
+          # Мониторинг диска в фоне
           while sleep 300; do
             echo "=== Мониторинг диска ==="
             df -h . | tail -1
@@ -292,7 +342,8 @@ jobs:
             if ! make -j2 V=w; then
               echo "::error::Сборка не удалась"
               # Сохраняем логи для диагностики
-              tail -50 logs/*.log 2>/dev/null || true
+              echo "=== Последние логи ==="
+              tail -100 logs/*.log 2>/dev/null || true
               kill $MONITOR_PID 2>/dev/null || true
               exit 1
             fi
@@ -311,22 +362,38 @@ jobs:
           
           echo "=== Сбор артефактов ==="
           
-          ART_DIR="artifacts/ax80-v1"
+          # Определяем имя директории на основе PR
+          if [ -n "${{ steps.upstream.outputs.pr_number }}" ]; then
+            ART_DIR="artifacts/ax80-v1-pr-${{ steps.upstream.outputs.pr_number }}"
+          else
+            ART_DIR="artifacts/ax80-v1"
+          fi
+          
           mkdir -p "$ART_DIR"
           
-          # Копируем только необходимые файлы
-          find bin/targets -type f \( \
-            -name '*-sysupgrade.bin' -o \
-            -name '*-factory.bin' -o \
-            -name 'sha256sums' -o \
-            -name '*.buildinfo' \
-          \) -exec cp {} "$ART_DIR/" \;
+          # Ищем файлы прошивок
+          FIRMWARE_FILES=$(find bin/targets -type f \( -name '*-sysupgrade.bin' -o -name '*-factory.bin' \) 2>/dev/null || true)
           
-          # Конфиг сборки
-          cp .config "$ART_DIR/full.config"
+          if [ -z "$FIRMWARE_FILES" ]; then
+            echo "::warning::Файлы прошивок не найдены, ищем альтернативы..."
+            find bin/targets -type f -name '*.bin' || true
+            find bin -type f -name '*.bin' || true
+          else
+            echo "Найдены файлы прошивок:"
+            echo "$FIRMWARE_FILES"
+            echo "$FIRMWARE_FILES" | xargs -I {} cp {} "$ART_DIR/" 2>/dev/null || true
+          fi
           
-          # Генерируем checksums
-          (cd "$ART_DIR" && sha256sum *.bin > sha256sums.txt 2>/dev/null || true)
+          # Копируем дополнительные файлы
+          cp .config "$ART_DIR/full.config" 2>/dev/null || true
+          find bin -name 'sha256sums' -exec cp {} "$ART_DIR/" \; 2>/dev/null || true
+          find bin -name '*.buildinfo' -exec cp {} "$ART_DIR/" \; 2>/dev/null || true
+          
+          # Генерируем checksums если есть bin файлы
+          if ls "$ART_DIR"/*.bin >/dev/null 2>&1; then
+            (cd "$ART_DIR" && sha256sum *.bin > sha256sums.txt)
+            echo "✓ Checksums сгенерированы"
+          fi
           
           # Информация о сборке
           {
@@ -334,33 +401,68 @@ jobs:
             echo "Repo: ${{ github.repository }}"
             echo "Commit: ${{ github.sha }}"
             echo "OpenWrt: ${{ steps.upstream.outputs.ref }}@${{ steps.upstream.outputs.short }}"
+            if [ -n "${{ steps.upstream.outputs.pr_number }}" ]; then
+              echo "PR: #${{ steps.upstream.outputs.pr_number }} - ${{ steps.upstream.outputs.pr_title }}"
+              echo "PR Author: ${{ steps.upstream.outputs.pr_author }}"
+            fi
             echo "Files:"
-            ls -la "$ART_DIR"/*.bin 2>/dev/null || echo "No firmware files"
+            ls -la "$ART_DIR/" 2>/dev/null || echo "No files found"
           } > "$ART_DIR/build-info.txt"
           
           echo "=== Результаты ==="
-          ls -la "$ART_DIR/"
+          ls -la "$ART_DIR/" 2>/dev/null || echo "Артефакты не созданы"
 
       - name: Upload firmware artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_PREFIX }}-firmware
-          path: openwrt/artifacts/ax80-v1
+          name: ${{ env.ARTIFACT_PREFIX }}${{ steps.upstream.outputs.pr_number && format('-pr-{0}', steps.upstream.outputs.pr_number) || '' }}-firmware
+          path: openwrt/artifacts/ax80-v1${{ steps.upstream.outputs.pr_number && format('-pr-{0}', steps.upstream.outputs.pr_number) || '' }}
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
-          compression-level: 9  # Максимальное сжатие
+          compression-level: 9
 
       # ===================================
       # 9. СОЗДАНИЕ РЕЛИЗА
       # ===================================
       
       - name: Prepare release
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && success()
         id: release
         run: |
-          tag="${{ env.RELEASE_PREFIX }}-$(date +%Y%m%d)"
-          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ steps.upstream.outputs.pr_number }}" ]; then
+            tag="${{ env.RELEASE_PREFIX }}-pr-${{ steps.upstream.outputs.pr_number }}-$(date +%Y%m%d)"
+            name="AX80 V1 PR ${{ steps.upstream.outputs.pr_number }} Build $(date +%Y%m%d)"
+          else
+            tag="${{ env.RELEASE_PREFIX }}-$(date +%Y%m%d)"
+            name="AX80 V1 Build $(date +%Y%m%d)"
+          fi
           
-          cat > release-info.md << EOF
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_name=$name" >> "$GITHUB_OUTPUT"
+          
+          # Создаем описание релиза
+          if [ -n "${{ steps.upstream.outputs.pr_number }}" ]; then
+            cat > release-info.md << EOF
+          ### TP-Link Archer AX80 V1 - OpenWrt Build with PR #${{ steps.upstream.outputs.pr_number }}
+          
+          **PR Title:** ${{ steps.upstream.outputs.pr_title }}
+          **PR Author:** ${{ steps.upstream.outputs.pr_author }}
+          **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          
+          **Source:** ${{ env.REMOTE_REPOSITORY }}@${{ steps.upstream.outputs.ref }}
+          **Commit:** ${{ steps.upstream.outputs.short }}
+          
+          **Installation:**
+          - \`factory.bin\` - для установки из stock прошивки
+          - \`sysupgrade.bin\` - для обновления существующего OpenWrt
+          
+          **⚠️  Это тестовая сборка с PR!**
+          Используйте с осторожностью, возможны нестабильности.
+          
+          Built via GitHub Actions
+          EOF
+          else
+            cat > release-info.md << EOF
           ### TP-Link Archer AX80 V1 - OpenWrt Build
           
           **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
@@ -379,25 +481,29 @@ jobs:
           
           Built via GitHub Actions
           EOF
+          fi
 
       - name: Create release
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && success()
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.release.outputs.release_tag }}
-          name: "AX80 V1 Build ${{ steps.release.outputs.release_tag }}"
+          name: ${{ steps.release.outputs.release_name }}
           body_path: release-info.md
-          files: openwrt/artifacts/ax80-v1/*
+          files: openwrt/artifacts/ax80-v1${{ steps.upstream.outputs.pr_number && format('-pr-{0}', steps.upstream.outputs.pr_number) || '' }}/*
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.upstream.outputs.pr_number != '' }}
 
       # ===================================
-      # 10. ОЧИСТКА
+      # 10. ФИНАЛЬНАЯ СТАТИСТИКА
       # ===================================
       
-      - name: Cleanup workspace
+      - name: Final stats
         if: always()
         run: |
-          echo "=== Финальная очистка ==="
+          echo "=== Финальная статистика ==="
           df -h
-          echo "Workflow завершен"
+          echo "Workflow завершен со статусом: ${{ job.status }}"
+          if [ -n "${{ steps.upstream.outputs.pr_number }}" ]; then
+            echo "Тестировался PR: #${{ steps.upstream.outputs.pr_number }}"
+          fi
