@@ -1,4 +1,4 @@
-name: Build OpenWrt for TP-Link AX80 V1
+name: Build OpenWrt for TP-Link AX80 V1 (GitHub Hosted)
 
 permissions:
   contents: write
@@ -19,15 +19,15 @@ on:
         required: false
         default: ""
   schedule:
-    - cron: "38 1 * * *"
+    - cron: "38 1 * * *"  # Ночное время (меньше нагрузка)
 
 concurrency:
   group: openwrt-build-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true  # Отменяем предыдущие сборки
 
 env:
   DL_CACHE_VERSION: v1
-  ARTIFACT_RETENTION_DAYS: 10
+  ARTIFACT_RETENTION_DAYS: 7  # Уменьшаем retention
   CONFIG_FILE: ax80-v1.config
   REMOTE_REPOSITORY: openwrt/openwrt
   REMOTE_REF: main
@@ -37,58 +37,67 @@ env:
 jobs:
   build:
     name: Build TP-Link AX80 V1 Firmware
-    runs-on: self-hosted
-    timeout-minutes: 480
+    runs-on: ubuntu-22.04  # Используем конкретную версию
+    timeout-minutes: 360   # 6 часов максимум
 
     steps:
       # ===================================
-      # 1. PREPARATION AND CLEANUP
+      # 1. ОЧИСТКА И ПОДГОТОВКА СИСТЕМЫ
       # ===================================
       
-      - name: Cleanup workspace
+      - name: Free up disk space
         run: |
-          echo "=== Workspace Cleanup ==="
-          echo "Current directory: $PWD"
-          df -h . | tail -1
+          echo "=== Освобождение дискового пространства ==="
+          df -h
           
-          # Remove old build artifacts but preserve caches
-          rm -rf openwrt builder 2>/dev/null || true
-          find . -name '*.lock' -delete 2>/dev/null || true
+          # Удаляем ненужные системные пакеты
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
           
-          echo "Disk space after cleanup:"
-          df -h . | tail -1
+          echo "После очистки:"
+          df -h
 
       - name: Checkout builder repository
         uses: actions/checkout@v4
         with:
           path: builder
+          sparse-checkout: |
+            *.config
+            files/**
+            .github/workflows/build-openwrt.yaml
 
-      - name: Verify build dependencies
+      - name: Install build dependencies
         run: |
-          echo "=== Checking Build Dependencies ==="
-          missing=()
-          for cmd in git gcc g++ make gawk wget unzip python3 rsync flex bison swig ccache; do
-            command -v $cmd >/dev/null || missing+=("$cmd")
-          done
-          
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "Missing dependencies: ${missing[*]}"
-            if command -v apt >/dev/null 2>&1; then
-              echo "Installing dependencies via apt..."
-              sudo apt update -qq
-              sudo apt install -y build-essential clang flex bison g++ gawk gettext \
-                libncurses-dev libssl-dev python3-setuptools rsync swig unzip \
-                zlib1g-dev file wget llvm ccache libelf-dev
-            else
-              echo "::error::Missing dependencies and apt not available"
-              exit 1
-            fi
-          else
-            echo "✓ All required dependencies present"
-          fi
+          echo "=== Установка зависимостей ==="
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            g++ \
+            gawk \
+            gettext \
+            git \
+            libncurses-dev \
+            libssl-dev \
+            python3 \
+            python3-setuptools \
+            rsync \
+            swig \
+            unzip \
+            zlib1g-dev \
+            file \
+            wget \
+            ccache \
+            libelf-dev \
+            upx-ucl
 
       # ===================================
-      # 2. FETCH OPENWRT SOURCE
+      # 2. ПОЛУЧЕНИЕ ИСХОДНОГО КОДА OPENWRT
       # ===================================
       
       - name: Fetch upstream OpenWrt source
@@ -96,37 +105,15 @@ jobs:
         run: |
           set -euo pipefail
           
-          echo "=== Fetching OpenWrt Source ==="
+          echo "=== Получение исходного кода OpenWrt ==="
           
-          # Clean up any existing directory
-          if [ -d "openwrt" ]; then
-            echo "Removing existing openwrt directory..."
-            rm -rf openwrt
-          fi
-          
-          # Determine ref to clone
+          # Используем shallow clone для экономии места
           REF="${{ env.REMOTE_REF }}"
-          if [ "$REF" = "auto-next" ]; then
-            REF=$(git ls-remote https://github.com/${{ env.REMOTE_REPOSITORY }}.git "refs/heads/next-*" \
-              | grep -vi 'test' \
-              | awk '{print $2}' \
-              | sed 's|refs/heads/||' \
-              | sort -V \
-              | tail -n1)
-          fi
-          
-          # Allow override from workflow dispatch
           if [ -n "${{ github.event.inputs.remote_ref }}" ]; then
             REF="${{ github.event.inputs.remote_ref }}"
           fi
           
-          if [ -z "$REF" ]; then
-            echo "::error::Unable to determine upstream ref"
-            exit 1
-          fi
-          
-          # Clone repository
-          echo "Cloning OpenWrt from ${{ env.REMOTE_REPOSITORY }} (ref: $REF)"
+          echo "Клонируем OpenWrt (ветка: $REF)"
           git clone --depth=1 --filter=blob:none --single-branch \
             --branch "$REF" \
             https://github.com/${{ env.REMOTE_REPOSITORY }}.git openwrt
@@ -135,10 +122,12 @@ jobs:
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          echo "✓ OpenWrt source fetched: $(git rev-parse --short HEAD)"
+          
+          echo "✓ Исходный код получен: $(git rev-parse --short HEAD)"
+          du -sh .
 
       # ===================================
-      # 3. RESTORE CACHES
+      # 3. КЭШИРОВАНИЕ (ОПТИМИЗИРОВАННОЕ)
       # ===================================
       
       - name: Restore feeds cache
@@ -147,291 +136,213 @@ jobs:
           path: |
             openwrt/feeds
             openwrt/.feeds_updated
-          key: feeds-${{ hashFiles('openwrt/feeds.conf.default') }}-${{ github.sha }}
+          key: feeds-${{ runner.os }}-${{ hashFiles('openwrt/feeds.conf.default') }}-${{ github.sha }}
           restore-keys: |
-            feeds-${{ hashFiles('openwrt/feeds.conf.default') }}-
-            feeds-
+            feeds-${{ runner.os }}-${{ hashFiles('openwrt/feeds.conf.default') }}-
+            feeds-${{ runner.os }}-
 
       - name: Restore downloads cache
         uses: actions/cache@v4
         with:
           path: openwrt/dl
-          key: openwrt-dl-${{ env.DL_CACHE_VERSION }}-${{ hashFiles('builder/ax80-v1.config') }}
+          key: openwrt-dl-${{ runner.os }}-${{ env.DL_CACHE_VERSION }}-${{ hashFiles('builder/ax80-v1.config') }}
           restore-keys: |
-            openwrt-dl-${{ env.DL_CACHE_VERSION }}-
+            openwrt-dl-${{ runner.os }}-${{ env.DL_CACHE_VERSION }}-
+            openwrt-dl-${{ runner.os }}-
 
       - name: Restore ccache
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-ax80-v1-${{ github.sha }}
+          key: ccache-${{ runner.os }}-ax80-v1-${{ github.sha }}
           restore-keys: |
-            ccache-ax80-v1-
-
-      - name: Restore toolchain cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            openwrt/staging_dir/toolchain-*
-            openwrt/build_dir/toolchain-*
-          key: toolchain-ax80-v1-${{ hashFiles('builder/ax80-v1.config') }}
-          restore-keys: |
-            toolchain-ax80-v1-
+            ccache-${{ runner.os }}-ax80-v1-
 
       # ===================================
-      # 4. UPDATE FEEDS
+      # 4. ОБНОВЛЕНИЕ FEEDS (ОПТИМИЗИРОВАННОЕ)
       # ===================================
       
       - name: Update and install feeds
         run: |
           cd openwrt
           
-          echo "=== Updating Feeds ==="
+          echo "=== Обновление feeds ==="
+          echo "Диск перед обновлением:"
+          df -h .
           
-          # Configure git for better reliability
-          git config --global http.postBuffer 1048576000
-          git config --global http.lowSpeedLimit 1000
-          git config --global http.lowSpeedTime 300
-          git config --global core.compression 0
-          git config --global protocol.version 2
-          
-          # Check if feeds are already current from cache
+          # Быстрое обновление если есть кэш
           if [ -f .feeds_updated ]; then
-            echo "Using cached feeds, attempting quick update..."
-            if ! ./scripts/feeds update -a; then
-              echo "Cached feeds update failed, forcing fresh clone..."
-              rm -rf feeds .feeds_updated
-            fi
-          fi
-          
-          # Update feeds with robust retry logic
-          if [ ! -f .feeds_updated ]; then
-            for attempt in {1..5}; do
-              echo "Attempt $attempt/5: Updating feeds..."
-              
-              if timeout 600 ./scripts/feeds update -a; then
-                echo "✓ Feeds updated successfully"
+            echo "Используем кэшированные feeds, быстрое обновление..."
+            timeout 300 ./scripts/feeds update -a || true
+          else
+            echo "Полное обновление feeds..."
+            for attempt in {1..3}; do
+              echo "Попытка $attempt/3"
+              if timeout 400 ./scripts/feeds update -a; then
                 touch .feeds_updated
                 break
-              else
-                EXIT_CODE=$?
-                echo "Feed update failed (exit code: $EXIT_CODE)"
-                
-                if [ $attempt -lt 5 ]; then
-                  echo "Retrying in 15 seconds..."
-                  sleep 15
-                  # Clean up partial clones
-                  find feeds -name '*.git/index.lock' -delete 2>/dev/null || true
-                else
-                  echo "::error::Failed to update feeds after 5 attempts"
-                  exit 1
-                fi
+              elif [ $attempt -eq 3 ]; then
+                echo "::error::Не удалось обновить feeds"
+                exit 1
               fi
+              sleep 10
             done
           fi
           
-          # Install feeds with retry
-          echo "=== Installing Feeds ==="
-          for attempt in {1..2}; do
-            if ./scripts/feeds install -a; then
-              echo "✓ Feeds installed successfully"
-              break
-            else
-              if [ $attempt -eq 1 ]; then
-                echo "First feed install failed, retrying..."
-                sleep 5
-              else
-                echo "::error::Feed installation failed"
-                exit 1
-              fi
-            fi
-          done
+          echo "=== Установка feeds ==="
+          ./scripts/feeds install -a
+          
+          echo "Диск после обновления:"
+          df -h .
 
       # ===================================
-      # 5. PREPARE CONFIGURATION
+      # 5. КОНФИГУРАЦИЯ СБОРКИ
       # ===================================
       
-      - name: Prepare configuration and overlay
+      - name: Prepare configuration
         run: |
           cd openwrt
           
-          echo "=== Preparing Configuration ==="
+          echo "=== Подготовка конфигурации ==="
           
-          # Copy custom file overlay
+          # Копируем файлы overlay
           mkdir -p files
-          cp -a ../builder/files/. ./files/
+          cp -a ../builder/files/. ./files/ 2>/dev/null || true
           
-          # Update upgrade script with repository info
-          if [ -f ./files/usr/bin/upgrade_custom_openwrt ]; then
-            sed -i "s|XXXXXX/XXXXXX|${{ github.repository }}|" ./files/usr/bin/upgrade_custom_openwrt || true
-            chmod 755 ./files/usr/bin/upgrade_custom_openwrt
-            echo "✓ Updated upgrade script"
-          fi
-          
-          # Copy and expand configuration
+          # Копируем конфиг
           cp ../builder/${{ env.CONFIG_FILE }} .config
-          echo "CONFIG_CCACHE=y" >> .config
           
+          # Добавляем оптимизации для GitHub runners
+          echo "CONFIG_CCACHE=y" >> .config
+          echo "CONFIG_BUILD_LOG=y" >> .config
+          
+          # Минимальная конфигурация
           make defconfig
           
-          echo "✓ Configuration prepared"
+          echo "✓ Конфигурация готова"
 
       # ===================================
-      # 6. DOWNLOAD SOURCES
+      # 6. ЗАГРУЗКА ИСХОДНИКОВ
       # ===================================
       
       - name: Download sources
         run: |
           cd openwrt
           
-          echo "=== Downloading Sources ==="
+          echo "=== Загрузка исходников ==="
+          echo "Диск перед загрузкой:"
+          df -h .
           
-          CORES=$(nproc)
-          DOWNLOAD_JOBS=$((CORES * 2))
-          echo "Using $DOWNLOAD_JOBS parallel jobs ($CORES cores available)"
-          
-          # Attempt 1: Parallel with 2x cores
-          if ! make download -j${DOWNLOAD_JOBS} V=s; then
-            echo "::warning::Parallel download failed, retrying with reduced parallelism"
-            sleep 5
-            
-            # Attempt 2: Parallel with 1x cores
-            if ! make download -j${CORES} V=s; then
-              echo "::warning::Reduced parallel download failed, trying sequential"
-              sleep 10
-              
-              # Attempt 3: Sequential
-              if ! make download -j1 V=sc; then
-                echo "::error::All download attempts failed"
-                make download -j1 V=s 2>&1 | grep -E '(ERROR|Download failed)' || true
-                exit 1
-              fi
+          # Последовательная загрузка для надежности
+          for attempt in {1..2}; do
+            echo "Попытка загрузки $attempt/2"
+            if make download -j2 V=s; then
+              echo "✓ Загрузка успешна"
+              break
+            elif [ $attempt -eq 2 ]; then
+              echo "::error::Не удалось загрузить исходники"
+              exit 1
             fi
-          fi
+            sleep 5
+          done
           
-          echo "✓ All sources downloaded"
+          echo "Размер dl директории:"
           du -sh dl/ || true
+          echo "Диск после загрузки:"
+          df -h .
 
       # ===================================
-      # 7. BUILD FIRMWARE
+      # 7. СБОРКА ПРОШИВКИ (ОПТИМИЗИРОВАННАЯ)
       # ===================================
       
       - name: Build firmware
         env:
-          CCACHE_DIR: ${{ github.workspace }}/../.ccache
+          CCACHE_DIR: ~/.ccache
           FORCE_UNSAFE_CONFIGURE: 1
         run: |
           cd openwrt
           
-          echo "=== Pre-build Status ==="
-          echo "Disk space:" && df -h . | tail -1
-          echo "Memory:" && free -h 2>/dev/null || true
-          echo "CPU cores: $(nproc)"
+          echo "=== Старт сборки ==="
+          echo "Доступные ресурсы:"
+          df -h .
+          nproc
+          free -h
           
-          # Check minimum disk space (20GB для AX80 - больше из-за размера образа)
-          AVAILABLE_KB=$(df --output=avail . | tail -1)
-          if [ "$AVAILABLE_KB" -lt 20971520 ]; then
-            echo "::warning::Low disk space: $(($AVAILABLE_KB / 1024 / 1024))GB available"
-          fi
-          
+          # Адаптивный параллелизм based on available resources
           CORES=$(nproc)
-          BUILD_JOBS=$((CORES + 1))
-          
-          echo ""
-          echo "=== Starting Build ==="
-          echo "Build jobs: $BUILD_JOBS"
-          echo "CCACHE: $CCACHE_DIR"
-          echo ""
-          
-          # Для AX80 может потребоваться больше памяти, регулируем параллелизм
-          MEM_GB=$(free -g 2>/dev/null | awk 'NR==2{print $2}' || echo 16)
-          if [ "$MEM_GB" -lt 16 ]; then
-            echo "Low memory detected (${MEM_GB}GB), reducing build parallelism"
-            BUILD_JOBS=$((CORES / 2 + 1))
+          if [ $CORES -gt 4 ]; then
+            BUILD_JOBS=$((CORES - 2))  # Оставляем 2 ядра системе
+          else
+            BUILD_JOBS=$CORES
           fi
           
-          # Attempt 1: Parallel build
-          if ! make -j${BUILD_JOBS} V=w; then
-            echo "::warning::Parallel build failed, analyzing error"
+          echo "Используем $BUILD_JOBS параллельных задач"
+          
+          # Мониторинг диска во время сборки
+          while sleep 300; do
+            echo "=== Мониторинг диска ==="
             df -h . | tail -1
+          done &
+          MONITOR_PID=$!
+          
+          # Стратегия сборки с fallback
+          if ! make -j${BUILD_JOBS} V=w; then
+            echo "::warning::Параллельная сборка не удалась, пробуем с меньшим параллелизмом"
             
-            # Free up space
-            echo "Cleaning temporary files..."
-            rm -rf build_dir/target-*/root-* build_dir/target-*/linux-*/tmp/ 2>/dev/null || true
+            # Очистка временных файлов
+            find build_dir -name "*.o" -delete 2>/dev/null || true
             
-            # Attempt 2: Reduced parallelism
-            REDUCED_JOBS=$((BUILD_JOBS / 2))
-            echo "Retrying with $REDUCED_JOBS jobs..."
-            if ! make -j${REDUCED_JOBS} V=w; then
-              echo "::error::Reduced parallel build failed, trying single-threaded"
-              
-              # Attempt 3: Single-threaded with full verbosity
-              if ! make -j1 V=sc; then
-                echo "::error::Build failed completely"
-                echo "=== Build Log Tail ==="
-                tail -100 logs/* 2>/dev/null || true
-                exit 1
-              fi
+            if ! make -j2 V=w; then
+              echo "::error::Сборка не удалась"
+              # Сохраняем логи для диагностики
+              tail -50 logs/*.log 2>/dev/null || true
+              kill $MONITOR_PID 2>/dev/null || true
+              exit 1
             fi
           fi
           
-          echo ""
-          echo "=== Build Complete ==="
-          echo "Final disk:" && df -h . | tail -1
-          echo "Artifacts:" && du -sh bin/ 2>/dev/null || true
+          kill $MONITOR_PID 2>/dev/null || true
+          echo "✓ Сборка завершена успешно"
 
       # ===================================
-      # 8. COLLECT ARTIFACTS
+      # 8. СОБИРАЕМ АРТЕФАКТЫ
       # ===================================
       
       - name: Collect firmware artifacts
         run: |
           cd openwrt
           
-          echo "=== Collecting Artifacts ==="
+          echo "=== Сбор артефактов ==="
           
           ART_DIR="artifacts/ax80-v1"
           mkdir -p "$ART_DIR"
           
-          # Copy configuration
+          # Копируем только необходимые файлы
+          find bin/targets -type f \( \
+            -name '*-sysupgrade.bin' -o \
+            -name '*-factory.bin' -o \
+            -name 'sha256sums' -o \
+            -name '*.buildinfo' \
+          \) -exec cp {} "$ART_DIR/" \;
+          
+          # Конфиг сборки
           cp .config "$ART_DIR/full.config"
           
-          # Find and copy firmware files
-          FIRMWARE_COUNT=0
-          while IFS= read -r -d '' file; do
-            cp "$file" "$ART_DIR/"
-            FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
-          done < <(find bin -type f \( -name 'openwrt-*-sysupgrade.bin' -o -name 'openwrt-*-factory.bin' -o -name 'openwrt-*-initramfs-kernel.bin' -o -name 'config.buildinfo' -o -name 'sha256sums' \) -print0)
+          # Генерируем checksums
+          (cd "$ART_DIR" && sha256sum *.bin > sha256sums.txt 2>/dev/null || true)
           
-          if [ $FIRMWARE_COUNT -eq 0 ]; then
-            echo "::error::No firmware files found"
-            find bin -type f -name '*.bin' -o -name '*.img' || true
-            exit 1
-          fi
-          
-          # Generate checksums
-          if ls "$ART_DIR"/openwrt-*.bin >/dev/null 2>&1; then
-            (cd "$ART_DIR" && sha256sum openwrt-*.bin > sha256sums.txt)
-            echo "✓ Checksums generated"
-          fi
-          
-          # Create build info
+          # Информация о сборке
           {
-            echo "=== Build Information ==="
-            echo "Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            echo "Repository: ${{ github.repository }}"
+            echo "Build: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "Repo: ${{ github.repository }}"
             echo "Commit: ${{ github.sha }}"
-            echo "Workflow: ${{ github.workflow }}"
-            echo "Runner: $(uname -n)"
-            echo "Target: TP-Link Archer AX80 V1"
-            echo "Architecture: arm_cortex-a53"
-            echo ""
-            echo "=== Firmware Files ==="
-            ls -lh "$ART_DIR"/*.bin 2>/dev/null || true
+            echo "OpenWrt: ${{ steps.upstream.outputs.ref }}@${{ steps.upstream.outputs.short }}"
+            echo "Files:"
+            ls -la "$ART_DIR"/*.bin 2>/dev/null || echo "No firmware files"
           } > "$ART_DIR/build-info.txt"
           
-          echo "=== Artifacts Summary ==="
-          cat "$ART_DIR/build-info.txt"
+          echo "=== Результаты ==="
+          ls -la "$ART_DIR/"
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
@@ -439,100 +350,57 @@ jobs:
           name: ${{ env.ARTIFACT_PREFIX }}-firmware
           path: openwrt/artifacts/ax80-v1
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+          compression-level: 9  # Максимальное сжатие
 
       # ===================================
-      # 9. CREATE RELEASE
+      # 9. СОЗДАНИЕ РЕЛИЗА
       # ===================================
       
-      - name: Prepare release notes
-        id: meta
+      - name: Prepare release
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        id: release
         run: |
-          tag="${{ env.RELEASE_PREFIX }}-$(date +%Y%m%d-%H%M)"
+          tag="${{ env.RELEASE_PREFIX }}-$(date +%Y%m%d)"
           echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "release_name=TP-Link AX80 V1 firmware ($tag)" >> "$GITHUB_OUTPUT"
           
-          cat > release-notes.md << 'EOF'
-          ### Target Device
-          - **Model:** TP-Link Archer AX80 V1
-          - **Architecture:** ARM Cortex-A53
-          - **Config:** `ax80-v1.config`
+          cat > release-info.md << EOF
+          ### TP-Link Archer AX80 V1 - OpenWrt Build
           
-          ### Upstream Source
-          - **Repository:** https://github.com/${{ env.REMOTE_REPOSITORY }}
-          - **Ref:** ${{ steps.upstream.outputs.ref }}
-          - **Commit:** ${{ steps.upstream.outputs.commit }}
+          **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          **Source:** ${{ env.REMOTE_REPOSITORY }}@${{ steps.upstream.outputs.ref }}
+          **Commit:** ${{ steps.upstream.outputs.short }}
           
-          ### Installation Notes
-          - **Factory image:** Use for initial installation from stock firmware
-          - **Sysupgrade image:** Use for upgrading existing OpenWrt
-          - **Initramfs image:** For recovery/testing (does not persist)
+          **Installation:**
+          - \`factory.bin\` - для установки из stock прошивки
+          - \`sysupgrade.bin\` - для обновления существующего OpenWrt
           
-          ### Device Features
-          - Dual-band Wi-Fi 6 (802.11ax)
-          - 1.8 GHz quad-core CPU
-          - 512MB RAM
-          - 128MB NOR Flash
-          - 5x Gigabit Ethernet ports
-          - USB 3.0 port
-          
-          ### Firmware Features
-          - OpenSSH with hardened configuration
-          - WireGuard VPN support
-          - Policy-Based Routing (PBR)
-          - AdBlock Fast
-          - CAKE QoS support
-          - LuCI web interface with HTTPS
+          **Features:**
           - Wi-Fi 6 (802.11ax) support
+          - LuCI web interface
+          - WireGuard VPN
+          - SQM QoS
           
-          ### Build Info
-          - Built from: https://github.com/${{ github.repository }}
-          - Commit: ${{ github.sha }}
-          - Architecture: arm_cortex-a53
+          Built via GitHub Actions
           EOF
 
-      - name: Publish release
+      - name: Create release
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        uses: ncipollo/release-action@v1
+        uses: softprops/action-gh-release@v1
         with:
-          allowUpdates: true
-          tag: ${{ steps.meta.outputs.release_tag }}
-          name: ${{ steps.meta.outputs.release_name }}
-          bodyFile: release-notes.md
-          artifacts: openwrt/artifacts/ax80-v1/*
-          replacesArtifacts: true
-          makeLatest: false
+          tag_name: ${{ steps.release.outputs.release_tag }}
+          name: "AX80 V1 Build ${{ steps.release.outputs.release_tag }}"
+          body_path: release-info.md
+          files: openwrt/artifacts/ax80-v1/*
+          draft: false
+          prerelease: false
 
       # ===================================
-      # 10. CLEANUP
+      # 10. ОЧИСТКА
       # ===================================
       
-      - name: Cleanup build directory
+      - name: Cleanup workspace
         if: always()
         run: |
-          echo "=== Cleanup ==="
-          
-          if [ ! -d openwrt ]; then
-            echo "No openwrt directory to clean"
-            exit 0
-          fi
-          
-          cd openwrt
-          
-          echo "Before cleanup:"
-          df -h . | tail -1
-          
-          # Remove temporary files but preserve caches
-          rm -rf build_dir/target-*/root-* 2>/dev/null || true
-          rm -rf build_dir/target-*/linux-*/tmp/ 2>/dev/null || true
-          rm -rf tmp/ logs/ 2>/dev/null || true
-          
-          # Clean staging except toolchain (cached separately)
-          find staging_dir -mindepth 1 -maxdepth 1 ! -name 'toolchain-*' -exec rm -rf {} + 2>/dev/null || true
-          
-          # Clean package build dirs but keep dl/ cache
-          find build_dir -type d -name 'ipkg-*' -exec rm -rf {} + 2>/dev/null || true
-          
-          echo "After cleanup:"
-          df -h . | tail -1
-          
-          echo "✓ Cleanup complete"
+          echo "=== Финальная очистка ==="
+          df -h
+          echo "Workflow завершен"
