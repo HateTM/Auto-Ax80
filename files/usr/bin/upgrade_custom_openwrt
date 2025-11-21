@@ -1,0 +1,51 @@
+#!/bin/sh
+{
+if [ -e /var/run/upgrade_openwrt ]; then
+  printf "*** UPGRADE SCRIPT ALREADY RUNNING ***\n*** Delete '/var/run/upgrade_openwrt' if not. ***\n"
+else
+  touch /var/run/upgrade_openwrt
+  GITHUBREPOSITORY='XXXXXX/XXXXXX'
+  eval "$(grep -m 1 DISTRIB_REVISION /etc/openwrt_release)"
+  SYSUPGRADEFILE=$(curl -sS https://api.github.com/repos/${GITHUBREPOSITORY}/releases/latest | jq -r --arg exclude "$DISTRIB_REVISION" '.assets[] | select(.browser_download_url | contains("sysupgrade")) | select((($exclude | length) == 0) or (.browser_download_url | contains($exclude) | not)) | .browser_download_url')
+
+  if [ -n "$SYSUPGRADEFILE" ]; then
+    SHA256SUMFILE=$(curl -sS https://api.github.com/repos/${GITHUBREPOSITORY}/releases/latest | jq -r '.assets[] | select(.browser_download_url | contains("sha256sums")) | .browser_download_url')
+    [ -n "$SHA256SUMFILE" ] && SHA256="$(curl -sL "$SHA256SUMFILE" | grep -m 1 sysupgrade)"
+    [ -z "$SHA256" ] && SHA256="$(curl -sS https://api.github.com/repos/${GITHUBREPOSITORY}/releases/latest | jq -r '.assets[] | select(.browser_download_url | test("sysupgrade")) | "\(.digest)"' | sed -n 's/sha256\://p') ${SYSUPGRADEFILE##*/}"
+
+    if [ -n "$SHA256" ] && cd /tmp ; then
+      NEWVERSION="${SYSUPGRADEFILE#*snapshot-}"
+      echo "*** NEW FIRMWARE FOUND (${NEWVERSION%-mediatek*}) ***"
+      if [ "$1" = "--wait" ]; then
+        WAN_DEVICE=$(uci get network.wan.device)
+        [ -z "$WAN_DEVICE" ] && WAN_DEVICE='eth1'
+        while ip neigh | grep -v "$WAN_DEVICE" | grep -q REACHABLE ; do
+          echo "*** THERE ARE ACTIVE CLIENTS, WAITING 5 MINUTES ***"
+          sleep 300
+        done
+      fi
+
+      if [ "$1" = "--now" ] || [ "$1" = "--wait" ]; then
+        if curl -sOL "$SYSUPGRADEFILE" ; then
+          if echo "$SHA256" | sha256sum -cs ; then
+            echo "*** INSTALLING NEW FIRMWARE ***"
+            sysupgrade -v "${SYSUPGRADEFILE##*/}"
+          else
+            echo "*** ERROR IN FIRMWARE FILE (WRONG SHA256) ***"
+            rm -f "${SYSUPGRADEFILE##*/}"
+          fi
+        else
+          echo "*** ERROR DOWNLOADING FIRMWARE FILE ***"
+          rm -f "${SYSUPGRADEFILE##*/}"
+        fi
+        echo "*** END OF UPGRADE SCRIPT ***"
+      elif [ "$1" != "--check" ]; then
+        printf '*** Usage: %s --now   (upgrade firmware now)               ***\n***        %s --wait  (upgrade when no clients are active) ***\n***        %s --check (do not install new firmware)        ***\n' "$0" "$0" "$0"
+      fi
+    fi
+  else
+    echo "*** NO NEW FIRMWARE FOUND ***"
+  fi
+  rm -f /var/run/upgrade_openwrt
+fi
+} 2>&1 | tee /dev/stderr | logger $([ ${DEBUG+x} ] && echo '-p user.debug') -t "$(basename "$0" | grep -Eo '^.{0,23}')"[$$]

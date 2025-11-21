@@ -1,0 +1,40 @@
+uci -q batch << EOI
+
+# Wireless radio0 specific settings
+set wireless.radio0.country='PT'
+set wireless.radio0.band='2g'
+set wireless.radio0.channel='11'
+set wireless.radio0.htmode='HE20'
+set wireless.radio0.txpower='20'
+set wireless.radio0.cell_density='0'
+set wireless.radio0.vendor_vht='1'
+
+set wireless.default_radio0.ieee80211w='2'
+set wireless.default_radio0.noscan='1'
+set wireless.default_radio0.dtim_period='2'
+set wireless.default_radio0.beacon_int='100'
+set wireless.default_radio0.ieee80211n='1'
+set wireless.default_radio0.ocv='0'
+
+# Wireless radio1 specific settings
+set wireless.radio1.country='PT'
+set wireless.radio1.band='5g'
+set wireless.radio1.channel='44'
+set wireless.radio1.htmode='HE80'
+set wireless.radio1.txpower='10'
+set wireless.radio1.cell_density='1'
+
+set wireless.default_radio1.ieee80211w='2'
+set wireless.default_radio1.noscan='1'
+set wireless.default_radio1.dtim_period='2'
+set wireless.default_radio1.beacon_int='100'
+set wireless.default_radio1.ocv='0'
+
+# Firewall settings
+set firewall.@zone[1].input='DROP'
+set firewall.@zone[1].forward='DROP'
+
+# uHTTPd settings
+set uhttpd.main.redirect_https='1'
+
+EOI
