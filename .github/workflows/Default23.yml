@@ -166,16 +166,6 @@ jobs:
           restore-keys: |
             feeds-${{ runner.os }}-${{ hashFiles('openwrt/feeds.conf.default') }}-
             feeds-${{ runner.os }}-
-
-      - name: Restore downloads cache
-        uses: actions/cache@v4
-        with:
-          path: openwrt/dl
-          key: openwrt-dl-${{ runner.os }}-${{ env.DL_CACHE_VERSION }}-${{ hashFiles('builder/ax80-v1.config') }}-${{ steps.upstream.outputs.pr_number || 'main' }}
-          restore-keys: |
-            openwrt-dl-${{ runner.os }}-${{ env.DL_CACHE_VERSION }}-
-            openwrt-dl-${{ runner.os }}-
-
       - name: Restore ccache
         uses: actions/cache@v4
         with:
